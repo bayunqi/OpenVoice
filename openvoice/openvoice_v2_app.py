@@ -1,4 +1,6 @@
 import argparse
+import base64
+import mimetypes
 import os
 import time
 import tempfile
@@ -13,6 +15,9 @@ import torch
 
 from openvoice import se_extractor
 from openvoice.api import ToneColorConverter
+
+
+mimetypes.add_type("audio/wav", ".wav")
 
 
 LANGUAGE_TEXT = {
@@ -30,7 +35,7 @@ parser = argparse.ArgumentParser(description="OpenVoice V2 local cloning demo")
 parser.add_argument("--host", default="[::]", help="IPv6 host to bind. Defaults to [::]")
 parser.add_argument("--port", type=int, default=9004, help="Port to bind. Defaults to 9004")
 parser.add_argument("--share", action="store_true", help="Create a public Gradio link")
-parser.add_argument("--queue", action="store_true", help="Enable Gradio queue. Disabled by default for IPv6 proxies.")
+parser.add_argument("--no-queue", action="store_true", help="Disable Gradio queue and use /run/predict directly.")
 parser.add_argument("--checkpoint-dir", default="checkpoints_v2", help="OpenVoice V2 checkpoint directory")
 parser.add_argument("--output-dir", default="outputs_v2/demo", help="Directory for generated audio")
 parser.add_argument("--processed-dir", default="processed_v2/demo", help="Directory for extracted speaker embeddings")
@@ -105,6 +110,27 @@ def source_se_path(speaker_key):
 def audio_duration_seconds(audio_path):
     info = soundfile.info(audio_path)
     return float(info.frames) / float(info.samplerate)
+
+
+def audio_data_uri(audio_path):
+    mime = mimetypes.guess_type(audio_path)[0] or "audio/wav"
+    with open(audio_path, "rb") as f:
+        encoded = base64.b64encode(f.read()).decode("ascii")
+    return f"data:{mime};base64,{encoded}"
+
+
+def inline_audio_html(audio_path, download_name=None):
+    if not audio_path or not os.path.isfile(audio_path):
+        return ""
+    data_uri = audio_data_uri(audio_path)
+    player = f'<audio controls style="width:100%" src="{data_uri}"></audio>'
+    if download_name:
+        player += (
+            '<div style="margin-top:8px">'
+            f'<a download="{download_name}" href="{data_uri}">Download {download_name}</a>'
+            "</div>"
+        )
+    return player
 
 
 def update_example_text(language):
@@ -192,7 +218,7 @@ def clone_voice(text, language, base_speaker, reference_audio, speed):
         f"Generated audio length: {output_duration:.2f}s\n"
         f"RTF: {rtf:.4f}"
     )
-    return info, output_path, output_path
+    return info, inline_audio_html(output_path, download_name=os.path.basename(output_path))
 
 
 def _is_ipv6_literal(host):
@@ -235,8 +261,8 @@ def _rewrite_gradio_local_url(url):
 
 
 def launch_demo():
-    if args.queue:
-        demo.queue()
+    if not args.no_queue:
+        demo.queue(20)
 
     original_session_request = requests.sessions.Session.request
 
@@ -260,7 +286,14 @@ def launch_demo():
         requests.sessions.Session.request = original_session_request
 
 
-with gr.Blocks(title="OpenVoice V2 Demo", analytics_enabled=False) as demo:
+REF_AUDIO_CSS = """
+.ref-audio-noplayer .component-wrapper,
+.ref-audio-noplayer audio { display: none !important; }
+.ref-audio-noplayer .audio-container { height: auto !important; }
+"""
+
+
+with gr.Blocks(title="OpenVoice V2 Demo", analytics_enabled=False, css=REF_AUDIO_CSS) as demo:
     gr.Markdown("# OpenVoice V2 Local Demo")
     gr.Markdown("Upload reference audio, enter text, clone the voice, then play or download the generated output.")
 
@@ -291,8 +324,14 @@ with gr.Blocks(title="OpenVoice V2 Demo", analytics_enabled=False) as demo:
             )
             reference_gr = gr.Audio(
                 label="Reference audio",
+                elem_classes=["ref-audio-noplayer"],
                 type="filepath",
                 value="resources/example_reference.mp3",
+            )
+            reference_preview_gr = gr.HTML(
+                label="Reference audio preview",
+                value=inline_audio_html("resources/example_reference.mp3"),
+                visible=True,
             )
             with gr.Row():
                 refresh_button = gr.Button("Refresh speakers")
@@ -300,15 +339,23 @@ with gr.Blocks(title="OpenVoice V2 Demo", analytics_enabled=False) as demo:
 
         with gr.Column():
             info_gr = gr.Textbox(label="Status", lines=5)
-            output_audio_gr = gr.Audio(label="Output audio", type="filepath")
-            download_gr = gr.File(label="Download output")
+            output_audio_gr = gr.HTML(label="Output audio")
 
     language_gr.change(update_example_text, inputs=language_gr, outputs=input_text_gr)
+    reference_gr.change(
+        lambda path: gr.update(value=inline_audio_html(path), visible=bool(path)),
+        inputs=reference_gr,
+        outputs=reference_preview_gr,
+    )
+    reference_gr.clear(
+        lambda: gr.update(value="", visible=False),
+        outputs=reference_preview_gr,
+    )
     refresh_button.click(refresh_speakers, inputs=language_gr, outputs=[base_speaker_gr, info_gr])
     clone_button.click(
         clone_voice,
         inputs=[input_text_gr, language_gr, base_speaker_gr, reference_gr, speed_gr],
-        outputs=[info_gr, output_audio_gr, download_gr],
+        outputs=[info_gr, output_audio_gr],
     )
 
 
