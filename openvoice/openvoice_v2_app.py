@@ -3,8 +3,10 @@ import os
 import tempfile
 import uuid
 from functools import lru_cache
+from ipaddress import ip_address
 
 import gradio as gr
+import requests
 import torch
 
 from openvoice import se_extractor
@@ -161,6 +163,50 @@ def clone_voice(text, language, base_speaker, reference_audio, speed):
     return info, output_path, output_path
 
 
+def _is_ipv6_literal(host):
+    try:
+        return ip_address(host.strip("[]")).version == 6
+    except ValueError:
+        return False
+
+
+def _startup_check_host(host):
+    host = host.strip("[]")
+    if host in {"::", "0:0:0:0:0:0:0:0"}:
+        return "[::1]"
+    if _is_ipv6_literal(host):
+        return f"[{host}]"
+    return host
+
+
+def launch_demo():
+    demo.queue()
+
+    original_get = requests.get
+
+    def ipv6_safe_get(url, *request_args, **request_kwargs):
+        if _is_ipv6_literal(args.host):
+            invalid_prefix = f"http://{args.host}:{args.port}/"
+            valid_prefix = f"http://{_startup_check_host(args.host)}:{args.port}/"
+            if url.startswith(invalid_prefix):
+                url = valid_prefix + url[len(invalid_prefix):]
+        return original_get(url, *request_args, **request_kwargs)
+
+    requests.get = ipv6_safe_get
+    try:
+        if _is_ipv6_literal(args.host):
+            print(f"Running on IPv6 URL:  http://{_startup_check_host(args.host)}:{args.port}")
+        demo.launch(
+            server_name=args.host,
+            server_port=args.port,
+            share=args.share,
+            debug=True,
+            show_api=True,
+        )
+    finally:
+        requests.get = original_get
+
+
 with gr.Blocks(title="OpenVoice V2 Demo", analytics_enabled=False) as demo:
     gr.Markdown("# OpenVoice V2 Local Demo")
     gr.Markdown("Upload reference audio, enter text, clone the voice, then play or download the generated output.")
@@ -216,11 +262,4 @@ with gr.Blocks(title="OpenVoice V2 Demo", analytics_enabled=False) as demo:
 
 
 if __name__ == "__main__":
-    demo.queue()
-    demo.launch(
-        server_name=args.host,
-        server_port=args.port,
-        share=args.share,
-        debug=True,
-        show_api=True,
-    )
+    launch_demo()
