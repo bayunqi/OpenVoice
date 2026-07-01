@@ -78,6 +78,8 @@ python -m openvoice.openvoice_v2_app
 
 By default the service binds to IPv6 host `[::]` on port `9004`. You can then open `http://[::1]:9004` locally, or use the machine's IPv6 address with port `9004`.
 
+The V2 demo disables the Gradio queue by default because some IPv6 port-forwarding environments fail Gradio's queue event connection while still serving the page correctly. If you need Gradio queueing, launch with `--queue`.
+
 
 ## Install on Other Platforms
 

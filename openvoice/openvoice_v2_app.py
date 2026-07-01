@@ -30,6 +30,7 @@ parser = argparse.ArgumentParser(description="OpenVoice V2 local cloning demo")
 parser.add_argument("--host", default="[::]", help="IPv6 host to bind. Defaults to [::]")
 parser.add_argument("--port", type=int, default=9004, help="Port to bind. Defaults to 9004")
 parser.add_argument("--share", action="store_true", help="Create a public Gradio link")
+parser.add_argument("--queue", action="store_true", help="Enable Gradio queue. Disabled by default for IPv6 proxies.")
 parser.add_argument("--checkpoint-dir", default="checkpoints_v2", help="OpenVoice V2 checkpoint directory")
 parser.add_argument("--output-dir", default="outputs_v2/demo", help="Directory for generated audio")
 parser.add_argument("--processed-dir", default="processed_v2/demo", help="Directory for extracted speaker embeddings")
@@ -234,7 +235,8 @@ def _rewrite_gradio_local_url(url):
 
 
 def launch_demo():
-    demo.queue()
+    if args.queue:
+        demo.queue()
 
     original_session_request = requests.sessions.Session.request
 
@@ -252,6 +254,7 @@ def launch_demo():
             share=args.share,
             debug=True,
             show_api=True,
+            show_error=True,
         )
     finally:
         requests.sessions.Session.request = original_session_request
@@ -301,7 +304,6 @@ with gr.Blocks(title="OpenVoice V2 Demo", analytics_enabled=False) as demo:
             download_gr = gr.File(label="Download output")
 
     language_gr.change(update_example_text, inputs=language_gr, outputs=input_text_gr)
-    language_gr.change(refresh_speakers, inputs=language_gr, outputs=[base_speaker_gr, info_gr])
     refresh_button.click(refresh_speakers, inputs=language_gr, outputs=[base_speaker_gr, info_gr])
     clone_button.click(
         clone_voice,
