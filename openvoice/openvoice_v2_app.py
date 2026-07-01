@@ -150,6 +150,8 @@ def resolve_uploaded_file(uploaded_file):
         return uploaded_file
     if isinstance(uploaded_file, dict):
         return uploaded_file.get("name") or uploaded_file.get("path")
+    if hasattr(uploaded_file, "name"):
+        return uploaded_file.name
     if isinstance(uploaded_file, (list, tuple)) and uploaded_file:
         return resolve_uploaded_file(uploaded_file[0])
     return None
@@ -330,7 +332,7 @@ with gr.Blocks(title="OpenVoice V2 Demo", analytics_enabled=False) as demo:
                 label="Reference audio",
                 key="reference_audio",
                 file_types=["audio"],
-                type="filepath",
+                type="file",
             )
             with gr.Row():
                 refresh_button = gr.Button("Refresh speakers")
