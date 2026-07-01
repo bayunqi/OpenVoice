@@ -76,7 +76,7 @@ python -m unidic download
 python -m openvoice.openvoice_v2_app
 ```
 
-By default the service binds to IPv6 host `::` on port `9004`. You can then open `http://[::1]:9004` locally, or use the machine's IPv6 address with port `9004`.
+By default the service binds to IPv6 host `[::]` on port `9004`. You can then open `http://[::1]:9004` locally, or use the machine's IPv6 address with port `9004`.
 
 
 ## Install on Other Platforms
