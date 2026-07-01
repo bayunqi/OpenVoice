@@ -1,5 +1,6 @@
 import argparse
 import os
+import time
 import tempfile
 import uuid
 from functools import lru_cache
@@ -7,6 +8,7 @@ from ipaddress import ip_address
 
 import gradio as gr
 import requests
+import soundfile
 import torch
 
 from openvoice import se_extractor
@@ -99,6 +101,11 @@ def source_se_path(speaker_key):
     return os.path.join(args.checkpoint_dir, "base_speakers", "ses", f"{speaker_file}.pth")
 
 
+def audio_duration_seconds(audio_path):
+    info = soundfile.info(audio_path)
+    return float(info.frames) / float(info.samplerate)
+
+
 def update_example_text(language):
     return gr.update(value=LANGUAGE_TEXT[language])
 
@@ -135,17 +142,24 @@ def clone_voice(text, language, base_speaker, reference_audio, speed):
     src_path = os.path.join(tmp_dir, "base.wav")
     output_path = os.path.join(tmp_dir, "output.wav")
 
+    start_time = time.perf_counter()
+    step_start_time = start_time
     target_se, audio_name = se_extractor.get_se(
         reference_audio,
         converter,
         target_dir=args.processed_dir,
         vad=True,
     )
+    extract_time = time.perf_counter() - step_start_time
 
     if torch.backends.mps.is_available() and device == "cpu":
         torch.backends.mps.is_available = lambda: False
 
+    step_start_time = time.perf_counter()
     model.tts_to_file(text, speaker_id, src_path, speed=speed)
+    tts_time = time.perf_counter() - step_start_time
+
+    step_start_time = time.perf_counter()
     converter.convert(
         audio_src_path=src_path,
         src_se=source_se,
@@ -153,12 +167,29 @@ def clone_voice(text, language, base_speaker, reference_audio, speed):
         output_path=output_path,
         message="@MyShell",
     )
+    convert_time = time.perf_counter() - step_start_time
+    total_time = time.perf_counter() - start_time
+    output_duration = audio_duration_seconds(output_path)
+    rtf = total_time / output_duration if output_duration > 0 else float("inf")
+
+    print(f">> tone_color_extract_time: {extract_time:.2f} seconds")
+    print(f">> base_tts_time: {tts_time:.2f} seconds")
+    print(f">> tone_color_convert_time: {convert_time:.2f} seconds")
+    print(f">> Total inference time: {total_time:.2f} seconds")
+    print(f">> Generated audio length: {output_duration:.2f} seconds")
+    print(f">> RTF: {rtf:.4f}")
 
     info = (
         "Generated successfully.\n"
         f"Language: {language}\n"
         f"Base speaker: {speaker_key}\n"
-        f"Reference embedding: {audio_name}"
+        f"Reference embedding: {audio_name}\n"
+        f"Tone color extract time: {extract_time:.2f}s\n"
+        f"Base TTS time: {tts_time:.2f}s\n"
+        f"Tone color convert time: {convert_time:.2f}s\n"
+        f"Total inference time: {total_time:.2f}s\n"
+        f"Generated audio length: {output_duration:.2f}s\n"
+        f"RTF: {rtf:.4f}"
     )
     return info, output_path, output_path
 
