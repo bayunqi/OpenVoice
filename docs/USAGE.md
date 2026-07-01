@@ -80,6 +80,8 @@ By default the service binds to IPv6 host `[::]` on port `9004`. You can then op
 
 The V2 demo enables the Gradio queue by default so uploaded audio is sent through Gradio's file upload flow instead of being inlined into `/run/predict` JSON requests. This avoids request-body limits in some IPv6 proxy environments. If you need to disable queueing for local debugging, launch with `--no-queue`.
 
+The reference audio input starts empty; upload or record a reference clip before cloning.
+
 
 ## Install on Other Platforms
 

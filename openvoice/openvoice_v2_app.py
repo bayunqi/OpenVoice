@@ -326,12 +326,6 @@ with gr.Blocks(title="OpenVoice V2 Demo", analytics_enabled=False, css=REF_AUDIO
                 label="Reference audio",
                 elem_classes=["ref-audio-noplayer"],
                 type="filepath",
-                value="resources/example_reference.mp3",
-            )
-            reference_preview_gr = gr.HTML(
-                label="Reference audio preview",
-                value=inline_audio_html("resources/example_reference.mp3"),
-                visible=True,
             )
             with gr.Row():
                 refresh_button = gr.Button("Refresh speakers")
@@ -342,15 +336,6 @@ with gr.Blocks(title="OpenVoice V2 Demo", analytics_enabled=False, css=REF_AUDIO
             output_audio_gr = gr.HTML(label="Output audio")
 
     language_gr.change(update_example_text, inputs=language_gr, outputs=input_text_gr)
-    reference_gr.change(
-        lambda path: gr.update(value=inline_audio_html(path), visible=bool(path)),
-        inputs=reference_gr,
-        outputs=reference_preview_gr,
-    )
-    reference_gr.clear(
-        lambda: gr.update(value="", visible=False),
-        outputs=reference_preview_gr,
-    )
     refresh_button.click(refresh_speakers, inputs=language_gr, outputs=[base_speaker_gr, info_gr])
     clone_button.click(
         clone_voice,
