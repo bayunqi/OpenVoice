@@ -145,11 +145,19 @@ def refresh_speakers(language):
     return gr.update(choices=speakers, value=speakers[0] if speakers else ""), f"Loaded {language} speakers."
 
 
+def on_reference_audio_upload():
+    return gr.update(interactive=True), "Reference audio uploaded. Ready to clone."
+
+
+def on_reference_audio_clear():
+    return gr.update(interactive=False), "Please upload a reference audio file before cloning."
+
+
 def clone_voice(text, language, base_speaker, reference_audio, speed):
     if not reference_audio:
-        raise gr.Error("Please upload a reference audio file.")
+        return "Please upload a reference audio file before cloning.", ""
     if not text or len(text.strip()) < 2:
-        raise gr.Error("Please enter at least two characters of text.")
+        return "Please enter at least two characters of text.", ""
 
     text = text.strip()
     language = language or "EN_NEWEST"
@@ -324,18 +332,22 @@ with gr.Blocks(title="OpenVoice V2 Demo", analytics_enabled=False, css=REF_AUDIO
             )
             reference_gr = gr.Audio(
                 label="Reference audio",
+                key="reference_audio",
                 elem_classes=["ref-audio-noplayer"],
+                sources=["upload", "microphone"],
                 type="filepath",
             )
             with gr.Row():
                 refresh_button = gr.Button("Refresh speakers")
-                clone_button = gr.Button("Clone voice", variant="primary")
+                clone_button = gr.Button("Clone voice", variant="primary", interactive=False)
 
         with gr.Column():
             info_gr = gr.Textbox(label="Status", lines=5)
             output_audio_gr = gr.HTML(label="Output audio")
 
     language_gr.change(update_example_text, inputs=language_gr, outputs=input_text_gr)
+    reference_gr.upload(on_reference_audio_upload, inputs=[], outputs=[clone_button, info_gr])
+    reference_gr.clear(on_reference_audio_clear, inputs=[], outputs=[clone_button, info_gr])
     refresh_button.click(refresh_speakers, inputs=language_gr, outputs=[base_speaker_gr, info_gr])
     clone_button.click(
         clone_voice,
