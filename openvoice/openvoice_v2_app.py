@@ -179,20 +179,33 @@ def _startup_check_host(host):
     return host
 
 
+def _rewrite_gradio_local_url(url):
+    if not _is_ipv6_literal(args.host):
+        return url
+
+    invalid_authorities = (
+        f"http://{args.host}:{args.port}",
+        f"https://{args.host}:{args.port}",
+    )
+    valid_host = _startup_check_host(args.host)
+    for invalid_authority in invalid_authorities:
+        if url == invalid_authority or url.startswith(f"{invalid_authority}/"):
+            scheme = invalid_authority.split("://", 1)[0]
+            valid_authority = f"{scheme}://{valid_host}:{args.port}"
+            return valid_authority + url[len(invalid_authority):]
+    return url
+
+
 def launch_demo():
     demo.queue()
 
-    original_get = requests.get
+    original_session_request = requests.sessions.Session.request
 
-    def ipv6_safe_get(url, *request_args, **request_kwargs):
-        if _is_ipv6_literal(args.host):
-            invalid_prefix = f"http://{args.host}:{args.port}/"
-            valid_prefix = f"http://{_startup_check_host(args.host)}:{args.port}/"
-            if url.startswith(invalid_prefix):
-                url = valid_prefix + url[len(invalid_prefix):]
-        return original_get(url, *request_args, **request_kwargs)
+    def ipv6_safe_request(session, method, url, *request_args, **request_kwargs):
+        url = _rewrite_gradio_local_url(url)
+        return original_session_request(session, method, url, *request_args, **request_kwargs)
 
-    requests.get = ipv6_safe_get
+    requests.sessions.Session.request = ipv6_safe_request
     try:
         if _is_ipv6_literal(args.host):
             print(f"Running on IPv6 URL:  http://{_startup_check_host(args.host)}:{args.port}")
@@ -204,7 +217,7 @@ def launch_demo():
             show_api=True,
         )
     finally:
-        requests.get = original_get
+        requests.sessions.Session.request = original_session_request
 
 
 with gr.Blocks(title="OpenVoice V2 Demo", analytics_enabled=False) as demo:
