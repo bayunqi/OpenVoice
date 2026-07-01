@@ -78,9 +78,9 @@ python -m openvoice.openvoice_v2_app
 
 By default the service binds to IPv6 host `[::]` on port `9004`. You can then open `http://[::1]:9004` locally, or use the machine's IPv6 address with port `9004`.
 
-The V2 demo enables the Gradio queue by default so uploaded audio is sent through Gradio's file upload flow instead of being inlined into `/run/predict` JSON requests. This avoids request-body limits in some IPv6 proxy environments. If you need to disable queueing for local debugging, launch with `--no-queue`.
+The V2 demo uses a file-upload input for reference audio and disables the Gradio queue by default for proxy stability. If you need Gradio queueing for local debugging, launch with `--queue`.
 
-The reference audio input starts empty; upload or record a reference clip before cloning.
+The reference audio input starts empty; upload a reference clip before cloning.
 
 
 ## Install on Other Platforms

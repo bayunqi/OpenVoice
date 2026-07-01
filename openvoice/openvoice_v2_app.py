@@ -35,7 +35,7 @@ parser = argparse.ArgumentParser(description="OpenVoice V2 local cloning demo")
 parser.add_argument("--host", default="[::]", help="IPv6 host to bind. Defaults to [::]")
 parser.add_argument("--port", type=int, default=9004, help="Port to bind. Defaults to 9004")
 parser.add_argument("--share", action="store_true", help="Create a public Gradio link")
-parser.add_argument("--no-queue", action="store_true", help="Disable Gradio queue and use /run/predict directly.")
+parser.add_argument("--queue", action="store_true", help="Enable Gradio queue. Disabled by default for proxy stability.")
 parser.add_argument("--checkpoint-dir", default="checkpoints_v2", help="OpenVoice V2 checkpoint directory")
 parser.add_argument("--output-dir", default="outputs_v2/demo", help="Directory for generated audio")
 parser.add_argument("--processed-dir", default="processed_v2/demo", help="Directory for extracted speaker embeddings")
@@ -145,16 +145,19 @@ def refresh_speakers(language):
     return gr.update(choices=speakers, value=speakers[0] if speakers else ""), f"Loaded {language} speakers."
 
 
-def on_reference_audio_upload():
-    return gr.update(interactive=True), "Reference audio uploaded. Ready to clone."
-
-
-def on_reference_audio_clear():
-    return gr.update(interactive=False), "Please upload a reference audio file before cloning."
+def resolve_uploaded_file(uploaded_file):
+    if isinstance(uploaded_file, str):
+        return uploaded_file
+    if isinstance(uploaded_file, dict):
+        return uploaded_file.get("name") or uploaded_file.get("path")
+    if isinstance(uploaded_file, (list, tuple)) and uploaded_file:
+        return resolve_uploaded_file(uploaded_file[0])
+    return None
 
 
 def clone_voice(text, language, base_speaker, reference_audio, speed):
-    if not reference_audio:
+    reference_audio = resolve_uploaded_file(reference_audio)
+    if not reference_audio or not os.path.isfile(reference_audio):
         return "Please upload a reference audio file before cloning.", ""
     if not text or len(text.strip()) < 2:
         return "Please enter at least two characters of text.", ""
@@ -269,7 +272,7 @@ def _rewrite_gradio_local_url(url):
 
 
 def launch_demo():
-    if not args.no_queue:
+    if args.queue:
         demo.queue(20)
 
     original_session_request = requests.sessions.Session.request
@@ -294,14 +297,7 @@ def launch_demo():
         requests.sessions.Session.request = original_session_request
 
 
-REF_AUDIO_CSS = """
-.ref-audio-noplayer .component-wrapper,
-.ref-audio-noplayer audio { display: none !important; }
-.ref-audio-noplayer .audio-container { height: auto !important; }
-"""
-
-
-with gr.Blocks(title="OpenVoice V2 Demo", analytics_enabled=False, css=REF_AUDIO_CSS) as demo:
+with gr.Blocks(title="OpenVoice V2 Demo", analytics_enabled=False) as demo:
     gr.Markdown("# OpenVoice V2 Local Demo")
     gr.Markdown("Upload reference audio, enter text, clone the voice, then play or download the generated output.")
 
@@ -330,24 +326,21 @@ with gr.Blocks(title="OpenVoice V2 Demo", analytics_enabled=False, css=REF_AUDIO
                 value=1.0,
                 step=0.05,
             )
-            reference_gr = gr.Audio(
+            reference_gr = gr.File(
                 label="Reference audio",
                 key="reference_audio",
-                elem_classes=["ref-audio-noplayer"],
-                sources=["upload", "microphone"],
+                file_types=["audio"],
                 type="filepath",
             )
             with gr.Row():
                 refresh_button = gr.Button("Refresh speakers")
-                clone_button = gr.Button("Clone voice", variant="primary", interactive=False)
+                clone_button = gr.Button("Clone voice", variant="primary")
 
         with gr.Column():
             info_gr = gr.Textbox(label="Status", lines=5)
             output_audio_gr = gr.HTML(label="Output audio")
 
     language_gr.change(update_example_text, inputs=language_gr, outputs=input_text_gr)
-    reference_gr.upload(on_reference_audio_upload, inputs=[], outputs=[clone_button, info_gr])
-    reference_gr.clear(on_reference_audio_clear, inputs=[], outputs=[clone_button, info_gr])
     refresh_button.click(refresh_speakers, inputs=language_gr, outputs=[base_speaker_gr, info_gr])
     clone_button.click(
         clone_voice,
