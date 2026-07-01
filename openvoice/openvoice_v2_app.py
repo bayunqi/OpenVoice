@@ -35,7 +35,7 @@ parser = argparse.ArgumentParser(description="OpenVoice V2 local cloning demo")
 parser.add_argument("--host", default="[::]", help="IPv6 host to bind. Defaults to [::]")
 parser.add_argument("--port", type=int, default=9004, help="Port to bind. Defaults to 9004")
 parser.add_argument("--share", action="store_true", help="Create a public Gradio link")
-parser.add_argument("--queue", action="store_true", help="Enable Gradio queue. Disabled by default for proxy stability.")
+parser.add_argument("--no-queue", action="store_true", help="Disable Gradio queue for local debugging.")
 parser.add_argument("--checkpoint-dir", default="checkpoints_v2", help="OpenVoice V2 checkpoint directory")
 parser.add_argument("--output-dir", default="outputs_v2/demo", help="Directory for generated audio")
 parser.add_argument("--processed-dir", default="processed_v2/demo", help="Directory for extracted speaker embeddings")
@@ -274,7 +274,7 @@ def _rewrite_gradio_local_url(url):
 
 
 def launch_demo():
-    if args.queue:
+    if not args.no_queue:
         demo.queue(20)
 
     original_session_request = requests.sessions.Session.request
@@ -328,11 +328,11 @@ with gr.Blocks(title="OpenVoice V2 Demo", analytics_enabled=False) as demo:
                 value=1.0,
                 step=0.05,
             )
-            reference_gr = gr.File(
+            reference_gr = gr.Audio(
                 label="Reference audio",
                 key="reference_audio",
-                file_types=["audio"],
-                type="file",
+                sources=["upload", "microphone"],
+                type="filepath",
             )
             with gr.Row():
                 refresh_button = gr.Button("Refresh speakers")
