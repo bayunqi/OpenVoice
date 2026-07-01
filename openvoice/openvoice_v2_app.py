@@ -2,6 +2,7 @@ import argparse
 import base64
 import mimetypes
 import os
+import traceback
 import time
 import tempfile
 import uuid
@@ -39,6 +40,7 @@ parser.add_argument("--no-queue", action="store_true", help="Disable Gradio queu
 parser.add_argument("--checkpoint-dir", default="checkpoints_v2", help="OpenVoice V2 checkpoint directory")
 parser.add_argument("--output-dir", default="outputs_v2/demo", help="Directory for generated audio")
 parser.add_argument("--processed-dir", default="processed_v2/demo", help="Directory for extracted speaker embeddings")
+parser.add_argument("--preload-language", default="EN_NEWEST", choices=list(LANGUAGE_TEXT.keys()), help="Language to preload at startup")
 args = parser.parse_args()
 
 
@@ -107,6 +109,26 @@ def source_se_path(speaker_key):
     return os.path.join(args.checkpoint_dir, "base_speakers", "ses", f"{speaker_file}.pth")
 
 
+@lru_cache(maxsize=64)
+def get_source_se(speaker_key):
+    source_path = source_se_path(speaker_key)
+    _require_file(source_path)
+    return torch.load(source_path, map_location=device)
+
+
+def preload_models():
+    start_time = time.perf_counter()
+    print(f">> Preloading OpenVoice V2 models for {args.preload_language} on {device}...")
+    converter = get_converter()
+    model = get_tts(args.preload_language)
+    default_speaker = pick_speaker(args.preload_language, None)
+    get_source_se(default_speaker)
+    print(
+        f">> Preload complete in {time.perf_counter() - start_time:.2f} seconds "
+        f"(version={converter.version}, language={args.preload_language}, speaker={default_speaker})."
+    )
+
+
 def audio_duration_seconds(audio_path):
     info = soundfile.info(audio_path)
     return float(info.frames) / float(info.samplerate)
@@ -158,80 +180,82 @@ def resolve_uploaded_file(uploaded_file):
 
 
 def clone_voice(text, language, base_speaker, reference_audio, speed):
-    reference_audio = resolve_uploaded_file(reference_audio)
-    if not reference_audio or not os.path.isfile(reference_audio):
-        return "Please upload a reference audio file before cloning.", ""
-    if not text or len(text.strip()) < 2:
-        return "Please enter at least two characters of text.", ""
+    try:
+        reference_audio = resolve_uploaded_file(reference_audio)
+        if not reference_audio or not os.path.isfile(reference_audio):
+            return "Please upload a reference audio file before cloning.", ""
+        if not text or len(text.strip()) < 2:
+            return "Please enter at least two characters of text.", ""
 
-    text = text.strip()
-    language = language or "EN_NEWEST"
-    speed = float(speed or 1.0)
+        text = text.strip()
+        language = language or "EN_NEWEST"
+        speed = float(speed or 1.0)
 
-    converter = get_converter()
-    model = get_tts(language)
-    speaker_key = pick_speaker(language, base_speaker)
-    speaker_id = model.hps.data.spk2id[speaker_key]
+        converter = get_converter()
+        model = get_tts(language)
+        speaker_key = pick_speaker(language, base_speaker)
+        speaker_id = model.hps.data.spk2id[speaker_key]
+        source_se = get_source_se(speaker_key)
 
-    source_path = source_se_path(speaker_key)
-    _require_file(source_path)
-    source_se = torch.load(source_path, map_location=device)
+        request_id = uuid.uuid4().hex[:12]
+        tmp_dir = tempfile.mkdtemp(prefix=f"openvoice_v2_{request_id}_", dir=args.output_dir)
+        src_path = os.path.join(tmp_dir, "base.wav")
+        output_path = os.path.join(tmp_dir, "output.wav")
 
-    request_id = uuid.uuid4().hex[:12]
-    tmp_dir = tempfile.mkdtemp(prefix=f"openvoice_v2_{request_id}_", dir=args.output_dir)
-    src_path = os.path.join(tmp_dir, "base.wav")
-    output_path = os.path.join(tmp_dir, "output.wav")
+        start_time = time.perf_counter()
+        step_start_time = start_time
+        print(f">> Clone request: language={language}, speaker={speaker_key}, reference={reference_audio}")
+        target_se, audio_name = se_extractor.get_se(
+            reference_audio,
+            converter,
+            target_dir=args.processed_dir,
+            vad=True,
+        )
+        extract_time = time.perf_counter() - step_start_time
 
-    start_time = time.perf_counter()
-    step_start_time = start_time
-    target_se, audio_name = se_extractor.get_se(
-        reference_audio,
-        converter,
-        target_dir=args.processed_dir,
-        vad=True,
-    )
-    extract_time = time.perf_counter() - step_start_time
+        if torch.backends.mps.is_available() and device == "cpu":
+            torch.backends.mps.is_available = lambda: False
 
-    if torch.backends.mps.is_available() and device == "cpu":
-        torch.backends.mps.is_available = lambda: False
+        step_start_time = time.perf_counter()
+        model.tts_to_file(text, speaker_id, src_path, speed=speed)
+        tts_time = time.perf_counter() - step_start_time
 
-    step_start_time = time.perf_counter()
-    model.tts_to_file(text, speaker_id, src_path, speed=speed)
-    tts_time = time.perf_counter() - step_start_time
+        step_start_time = time.perf_counter()
+        converter.convert(
+            audio_src_path=src_path,
+            src_se=source_se,
+            tgt_se=target_se,
+            output_path=output_path,
+            message="@MyShell",
+        )
+        convert_time = time.perf_counter() - step_start_time
+        total_time = time.perf_counter() - start_time
+        output_duration = audio_duration_seconds(output_path)
+        rtf = total_time / output_duration if output_duration > 0 else float("inf")
 
-    step_start_time = time.perf_counter()
-    converter.convert(
-        audio_src_path=src_path,
-        src_se=source_se,
-        tgt_se=target_se,
-        output_path=output_path,
-        message="@MyShell",
-    )
-    convert_time = time.perf_counter() - step_start_time
-    total_time = time.perf_counter() - start_time
-    output_duration = audio_duration_seconds(output_path)
-    rtf = total_time / output_duration if output_duration > 0 else float("inf")
+        print(f">> tone_color_extract_time: {extract_time:.2f} seconds")
+        print(f">> base_tts_time: {tts_time:.2f} seconds")
+        print(f">> tone_color_convert_time: {convert_time:.2f} seconds")
+        print(f">> Total inference time: {total_time:.2f} seconds")
+        print(f">> Generated audio length: {output_duration:.2f} seconds")
+        print(f">> RTF: {rtf:.4f}")
 
-    print(f">> tone_color_extract_time: {extract_time:.2f} seconds")
-    print(f">> base_tts_time: {tts_time:.2f} seconds")
-    print(f">> tone_color_convert_time: {convert_time:.2f} seconds")
-    print(f">> Total inference time: {total_time:.2f} seconds")
-    print(f">> Generated audio length: {output_duration:.2f} seconds")
-    print(f">> RTF: {rtf:.4f}")
-
-    info = (
-        "Generated successfully.\n"
-        f"Language: {language}\n"
-        f"Base speaker: {speaker_key}\n"
-        f"Reference embedding: {audio_name}\n"
-        f"Tone color extract time: {extract_time:.2f}s\n"
-        f"Base TTS time: {tts_time:.2f}s\n"
-        f"Tone color convert time: {convert_time:.2f}s\n"
-        f"Total inference time: {total_time:.2f}s\n"
-        f"Generated audio length: {output_duration:.2f}s\n"
-        f"RTF: {rtf:.4f}"
-    )
-    return info, inline_audio_html(output_path, download_name=os.path.basename(output_path))
+        info = (
+            "Generated successfully.\n"
+            f"Language: {language}\n"
+            f"Base speaker: {speaker_key}\n"
+            f"Reference embedding: {audio_name}\n"
+            f"Tone color extract time: {extract_time:.2f}s\n"
+            f"Base TTS time: {tts_time:.2f}s\n"
+            f"Tone color convert time: {convert_time:.2f}s\n"
+            f"Total inference time: {total_time:.2f}s\n"
+            f"Generated audio length: {output_duration:.2f}s\n"
+            f"RTF: {rtf:.4f}"
+        )
+        return info, inline_audio_html(output_path, download_name=os.path.basename(output_path))
+    except Exception as exc:
+        traceback.print_exc()
+        return f"[ERROR] {type(exc).__name__}: {exc}", ""
 
 
 def _is_ipv6_literal(host):
@@ -274,6 +298,8 @@ def _rewrite_gradio_local_url(url):
 
 
 def launch_demo():
+    preload_models()
+
     if not args.no_queue:
         demo.queue(20)
 
