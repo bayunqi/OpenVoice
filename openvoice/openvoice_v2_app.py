@@ -1,13 +1,47 @@
 import argparse
 import base64
+import glob
 import mimetypes
 import os
+import site
+import sys
 import traceback
 import time
 import tempfile
 import uuid
 from functools import lru_cache
 from ipaddress import ip_address
+
+
+def bootstrap_cudnn_library_path():
+    if "--no-cudnn" in sys.argv or os.environ.get("OPENVOICE_CUDNN_BOOTSTRAPPED") == "1":
+        return
+
+    candidate_roots = [
+        os.path.join(sys.prefix, "lib", f"python{sys.version_info.major}.{sys.version_info.minor}", "site-packages"),
+        *site.getsitepackages(),
+    ]
+    cudnn_lib_dirs = []
+    for root in candidate_roots:
+        cudnn_lib_dirs.extend(glob.glob(os.path.join(root, "nvidia", "cudnn", "lib")))
+    cudnn_lib_dirs = [path for path in dict.fromkeys(cudnn_lib_dirs) if os.path.isdir(path)]
+    if not cudnn_lib_dirs:
+        return
+
+    current_paths = os.environ.get("LD_LIBRARY_PATH", "").split(":")
+    current_paths = [path for path in current_paths if path]
+    if current_paths[: len(cudnn_lib_dirs)] == cudnn_lib_dirs:
+        return
+
+    env = os.environ.copy()
+    env["OPENVOICE_CUDNN_BOOTSTRAPPED"] = "1"
+    env["LD_LIBRARY_PATH"] = ":".join([*cudnn_lib_dirs, *current_paths])
+    print(f">> Using PyTorch-bundled cuDNN from: {':'.join(cudnn_lib_dirs)}")
+    os.execvpe(sys.executable, [sys.executable, *sys.argv], env)
+
+
+bootstrap_cudnn_library_path()
+
 
 import gradio as gr
 import requests
@@ -41,14 +75,14 @@ parser.add_argument("--checkpoint-dir", default="checkpoints_v2", help="OpenVoic
 parser.add_argument("--output-dir", default="outputs_v2/demo", help="Directory for generated audio")
 parser.add_argument("--processed-dir", default="processed_v2/demo", help="Directory for extracted speaker embeddings")
 parser.add_argument("--preload-language", default="EN_NEWEST", choices=list(LANGUAGE_TEXT.keys()), help="Language to preload at startup")
-parser.add_argument("--enable-cudnn", action="store_true", help="Enable cuDNN. Disabled by default to avoid runtime/library mismatches.")
+parser.add_argument("--no-cudnn", action="store_true", help="Disable cuDNN for emergency debugging.")
 args = parser.parse_args()
 
 
 device = "cuda:0" if torch.cuda.is_available() else "cpu"
-if "cuda" in device and not args.enable_cudnn:
+if "cuda" in device and args.no_cudnn:
     torch.backends.cudnn.enabled = False
-    print(">> cuDNN disabled for this demo. Use --enable-cudnn only if your CUDA/cuDNN runtime matches PyTorch.")
+    print(">> cuDNN disabled for this demo.")
 os.makedirs(args.output_dir, exist_ok=True)
 os.makedirs(args.processed_dir, exist_ok=True)
 

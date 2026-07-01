@@ -82,6 +82,8 @@ The V2 demo uses Gradio's audio upload input with queueing enabled by default, m
 
 The reference audio input starts empty; upload a reference clip before cloning.
 
+The demo keeps cuDNN enabled by default. At startup it prefers the cuDNN library bundled in the active PyTorch/Python environment over older libraries in `LD_LIBRARY_PATH`; use `--no-cudnn` only for emergency debugging.
+
 
 ## Install on Other Platforms
 
