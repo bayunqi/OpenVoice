@@ -70,7 +70,7 @@ python -m unidic download
 
 **Demo Usage.** Please see [`demo_part3.ipynb`](../demo_part3.ipynb) for example usage of OpenVoice V2. Now it natively supports English, Spanish, French, Chinese, Japanese and Korean.
 
-**Local Gradio Demo.** This repository also includes a minimal OpenVoice V2 web demo for local use. It accepts reference audio, generates cloned speech, and provides the output audio for playback and download.
+**Local Web Demo.** This repository also includes a minimal OpenVoice V2 web demo for local use. It accepts reference audio, generates cloned speech, and provides the output audio for playback and download.
 
 ```
 python -m openvoice.openvoice_v2_app
@@ -78,7 +78,7 @@ python -m openvoice.openvoice_v2_app
 
 By default the service binds to IPv6 host `[::]` on port `9004`. You can then open `http://[::1]:9004` locally, or use the machine's IPv6 address with port `9004`.
 
-The V2 demo uses Gradio's audio upload input with queueing enabled by default, matching the IndexTTS IPv6 web UI flow. If you need to disable queueing for local debugging, launch with `--no-queue`.
+The V2 demo uses a lightweight FastAPI page and a plain multipart `/api/clone` request instead of Gradio queue events, so upload and clone failures surface as normal HTTP responses.
 
 The reference audio input starts empty; upload a reference clip before cloning.
 

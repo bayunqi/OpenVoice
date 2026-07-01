@@ -39,7 +39,10 @@ setup(name='MyShell-OpenVoice',
             'cn2an==0.5.22',
             'jieba==0.42.1',
             'gradio==3.48.0',
-            'langid==1.1.6'
+            'langid==1.1.6',
+            'fastapi',
+            'uvicorn',
+            'python-multipart'
       ],
       zip_safe=False
       )
