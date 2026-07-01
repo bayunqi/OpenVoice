@@ -41,10 +41,14 @@ parser.add_argument("--checkpoint-dir", default="checkpoints_v2", help="OpenVoic
 parser.add_argument("--output-dir", default="outputs_v2/demo", help="Directory for generated audio")
 parser.add_argument("--processed-dir", default="processed_v2/demo", help="Directory for extracted speaker embeddings")
 parser.add_argument("--preload-language", default="EN_NEWEST", choices=list(LANGUAGE_TEXT.keys()), help="Language to preload at startup")
+parser.add_argument("--enable-cudnn", action="store_true", help="Enable cuDNN. Disabled by default to avoid runtime/library mismatches.")
 args = parser.parse_args()
 
 
 device = "cuda:0" if torch.cuda.is_available() else "cpu"
+if "cuda" in device and not args.enable_cudnn:
+    torch.backends.cudnn.enabled = False
+    print(">> cuDNN disabled for this demo. Use --enable-cudnn only if your CUDA/cuDNN runtime matches PyTorch.")
 os.makedirs(args.output_dir, exist_ok=True)
 os.makedirs(args.processed_dir, exist_ok=True)
 
@@ -356,8 +360,6 @@ with gr.Blocks(title="OpenVoice V2 Demo", analytics_enabled=False) as demo:
             )
             reference_gr = gr.Audio(
                 label="Reference audio",
-                key="reference_audio",
-                sources=["upload", "microphone"],
                 type="filepath",
             )
             with gr.Row():
