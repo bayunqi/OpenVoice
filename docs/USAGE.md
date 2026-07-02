@@ -78,7 +78,7 @@ python -m openvoice.openvoice_v2_app
 
 By default the service binds to IPv6 host `[::]` on port `9004`. You can then open `http://[::1]:9004` locally, or use the machine's IPv6 address with port `9004`.
 
-The V2 demo follows the IndexTTS IPv6 web UI pattern: Gradio queueing is enabled by default, the reference `gr.Audio` upload/record controls are kept, the built-in player is hidden with scoped CSS, and playback/download uses an inline HTML audio player.
+The V2 demo follows the IndexTTS IPv6 web UI pattern on a Python 3.9-compatible Gradio release: Gradio queueing is enabled by default, the reference `gr.Audio` upload/record controls are kept, the built-in player is hidden with scoped CSS, and playback/download uses an inline HTML audio player.
 
 The reference audio input starts empty; upload a reference clip before cloning.
 
