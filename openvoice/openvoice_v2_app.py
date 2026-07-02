@@ -46,6 +46,32 @@ import gradio_client.utils as gradio_client_utils
 import soundfile
 import torch
 
+import jinja2.utils
+
+# Gradio 4.44.1 passes a dict inside Jinja2's template cache key,
+# making it unhashable. Patch both get and setitem to gracefully
+# skip caching instead of crashing.
+_original_lru_cache_get = jinja2.utils.LRUCache.get
+_original_lru_cache_setitem = jinja2.utils.LRUCache.__setitem__
+
+
+def _patched_lru_cache_get(self, key, default=None):
+    try:
+        return _original_lru_cache_get(self, key, default)
+    except TypeError:
+        return default
+
+
+def _patched_lru_cache_setitem(self, key, value):
+    try:
+        _original_lru_cache_setitem(self, key, value)
+    except TypeError:
+        pass  # unhashable key — skip caching
+
+
+jinja2.utils.LRUCache.get = _patched_lru_cache_get
+jinja2.utils.LRUCache.__setitem__ = _patched_lru_cache_setitem
+
 from openvoice import se_extractor
 from openvoice.api import ToneColorConverter
 
