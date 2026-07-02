@@ -149,7 +149,7 @@ LANGUAGE_TEXT = {
 parser = argparse.ArgumentParser(description="OpenVoice V2 local cloning demo")
 parser.add_argument("--host", default="[::]", help="IPv6 host to bind. Defaults to [::]")
 parser.add_argument("--port", type=int, default=9004, help="Port to bind. Defaults to 9004")
-parser.add_argument("--share", action="store_true", help="Create a public Gradio link")
+parser.add_argument("--share", action="store_true", default=None, help="Force a public Gradio link (default: auto-detect)")
 parser.add_argument("--no-queue", action="store_true", help="Disable Gradio queue for local debugging.")
 parser.add_argument("--checkpoint-dir", default="checkpoints_v2", help="OpenVoice V2 checkpoint directory")
 parser.add_argument("--output-dir", default="outputs_v2/demo", help="Directory for generated audio")
