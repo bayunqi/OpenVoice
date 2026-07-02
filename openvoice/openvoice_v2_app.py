@@ -10,7 +10,6 @@ import time
 import traceback
 import uuid
 from functools import lru_cache
-from ipaddress import ip_address
 
 
 def bootstrap_cudnn_library_path():
@@ -43,7 +42,6 @@ bootstrap_cudnn_library_path()
 
 
 import gradio as gr
-import requests
 import soundfile
 import torch
 
@@ -315,45 +313,6 @@ def clone_voice(text, language, base_speaker, reference_audio, speed):
         return f"[ERROR] {type(exc).__name__}: {exc}", ""
 
 
-def _is_ipv6_literal(host):
-    try:
-        return ip_address(host.strip("[]")).version == 6
-    except ValueError:
-        return False
-
-
-def _startup_check_host(host):
-    host = host.strip("[]")
-    if host in {"::", "0:0:0:0:0:0:0:0"}:
-        return "[::1]"
-    if _is_ipv6_literal(host):
-        return f"[{host}]"
-    return host
-
-
-def _rewrite_gradio_local_url(url):
-    if not _is_ipv6_literal(args.host):
-        return url
-
-    raw_host = args.host.strip("[]")
-    bracketed_host = f"[{raw_host}]"
-    invalid_authorities = (
-        f"http://{args.host}:{args.port}",
-        f"https://{args.host}:{args.port}",
-        f"http://{raw_host}:{args.port}",
-        f"https://{raw_host}:{args.port}",
-        f"http://{bracketed_host}:{args.port}",
-        f"https://{bracketed_host}:{args.port}",
-    )
-    valid_host = _startup_check_host(args.host)
-    for invalid_authority in invalid_authorities:
-        if url == invalid_authority or url.startswith(f"{invalid_authority}/"):
-            scheme = invalid_authority.split("://", 1)[0]
-            valid_authority = f"{scheme}://{valid_host}:{args.port}"
-            return valid_authority + url[len(invalid_authority):]
-    return url
-
-
 def on_reference_audio_change(path):
     if not path or not os.path.isfile(path):
         return gr.update(value="", visible=False)
@@ -427,26 +386,8 @@ def launch_demo():
     if not args.no_queue:
         demo.queue(20)
 
-    original_session_request = requests.sessions.Session.request
-
-    def ipv6_safe_request(session, method, url, *request_args, **request_kwargs):
-        url = _rewrite_gradio_local_url(url)
-        return original_session_request(session, method, url, *request_args, **request_kwargs)
-
-    requests.sessions.Session.request = ipv6_safe_request
-    try:
-        if _is_ipv6_literal(args.host):
-            print(f"Running on IPv6 URL:  http://{_startup_check_host(args.host)}:{args.port}")
-        demo.launch(
-            server_name=args.host,
-            server_port=args.port,
-            share=args.share,
-            debug=True,
-            show_api=False,
-            show_error=True,
-        )
-    finally:
-        requests.sessions.Session.request = original_session_request
+    gr.Blocks.get_api_info = lambda self: {}
+    demo.launch(server_name=args.host, server_port=args.port, share=args.share)
 
 
 if __name__ == "__main__":
