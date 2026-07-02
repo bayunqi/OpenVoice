@@ -1,17 +1,16 @@
 import argparse
 import base64
 import glob
-import html
 import mimetypes
 import os
-import shutil
 import site
 import sys
-import traceback
-import time
 import tempfile
+import time
+import traceback
 import uuid
 from functools import lru_cache
+from ipaddress import ip_address
 
 
 def bootstrap_cudnn_library_path():
@@ -29,8 +28,7 @@ def bootstrap_cudnn_library_path():
     if not cudnn_lib_dirs:
         return
 
-    current_paths = os.environ.get("LD_LIBRARY_PATH", "").split(":")
-    current_paths = [path for path in current_paths if path]
+    current_paths = [path for path in os.environ.get("LD_LIBRARY_PATH", "").split(":") if path]
     if current_paths[: len(cudnn_lib_dirs)] == cudnn_lib_dirs:
         return
 
@@ -44,9 +42,8 @@ def bootstrap_cudnn_library_path():
 bootstrap_cudnn_library_path()
 
 
-import uvicorn
-from fastapi import FastAPI, File, Form, UploadFile
-from fastapi.responses import HTMLResponse, JSONResponse
+import gradio as gr
+import requests
 import soundfile
 import torch
 
@@ -71,6 +68,8 @@ LANGUAGE_TEXT = {
 parser = argparse.ArgumentParser(description="OpenVoice V2 local cloning demo")
 parser.add_argument("--host", default="[::]", help="IPv6 host to bind. Defaults to [::]")
 parser.add_argument("--port", type=int, default=9004, help="Port to bind. Defaults to 9004")
+parser.add_argument("--share", action="store_true", help="Create a public Gradio link")
+parser.add_argument("--no-queue", action="store_true", help="Disable Gradio queue for local debugging.")
 parser.add_argument("--checkpoint-dir", default="checkpoints_v2", help="OpenVoice V2 checkpoint directory")
 parser.add_argument("--output-dir", default="outputs_v2/demo", help="Directory for generated audio")
 parser.add_argument("--processed-dir", default="processed_v2/demo", help="Directory for extracted speaker embeddings")
@@ -85,6 +84,25 @@ if "cuda" in device and args.no_cudnn:
     print(">> cuDNN disabled for this demo.")
 os.makedirs(args.output_dir, exist_ok=True)
 os.makedirs(args.processed_dir, exist_ok=True)
+
+
+def ensure_nltk_resources():
+    try:
+        import nltk
+    except ImportError:
+        return
+
+    resources = [
+        ("taggers/averaged_perceptron_tagger_eng", "averaged_perceptron_tagger_eng"),
+        ("taggers/averaged_perceptron_tagger", "averaged_perceptron_tagger"),
+        ("corpora/cmudict", "cmudict"),
+    ]
+    for resource, package in resources:
+        try:
+            nltk.data.find(resource)
+        except LookupError:
+            print(f">> Downloading NLTK resource: {package}")
+            nltk.download(package)
 
 
 def _require_file(path):
@@ -155,10 +173,11 @@ def get_source_se(speaker_key):
 
 
 def preload_models():
+    ensure_nltk_resources()
     start_time = time.perf_counter()
     print(f">> Preloading OpenVoice V2 models for {args.preload_language} on {device}...")
     converter = get_converter()
-    model = get_tts(args.preload_language)
+    get_tts(args.preload_language)
     default_speaker = pick_speaker(args.preload_language, None)
     get_source_se(default_speaker)
     print(
@@ -193,12 +212,16 @@ def inline_audio_html(audio_path, download_name=None):
     return player
 
 
+def update_example_text(language):
+    return gr.update(value=LANGUAGE_TEXT[language])
+
+
 def refresh_speakers(language):
     try:
         speakers = speaker_choices(language)
     except Exception as exc:
-        return [], f"[ERROR] {exc}"
-    return speakers, f"Loaded {language} speakers."
+        return gr.update(choices=[], value=""), f"[ERROR] {exc}"
+    return gr.update(choices=speakers, value=speakers[0] if speakers else ""), f"Loaded {language} speakers."
 
 
 def resolve_uploaded_file(uploaded_file):
@@ -292,191 +315,138 @@ def clone_voice(text, language, base_speaker, reference_audio, speed):
         return f"[ERROR] {type(exc).__name__}: {exc}", ""
 
 
-app = FastAPI(title="OpenVoice V2 Demo")
+def _is_ipv6_literal(host):
+    try:
+        return ip_address(host.strip("[]")).version == 6
+    except ValueError:
+        return False
 
 
-def render_index():
-    language_options = "\n".join(
-        f'<option value="{html.escape(language)}">{html.escape(language)}</option>'
-        for language in LANGUAGE_TEXT
+def _startup_check_host(host):
+    host = host.strip("[]")
+    if host in {"::", "0:0:0:0:0:0:0:0"}:
+        return "[::1]"
+    if _is_ipv6_literal(host):
+        return f"[{host}]"
+    return host
+
+
+def _rewrite_gradio_local_url(url):
+    if not _is_ipv6_literal(args.host):
+        return url
+
+    raw_host = args.host.strip("[]")
+    bracketed_host = f"[{raw_host}]"
+    invalid_authorities = (
+        f"http://{args.host}:{args.port}",
+        f"https://{args.host}:{args.port}",
+        f"http://{raw_host}:{args.port}",
+        f"https://{raw_host}:{args.port}",
+        f"http://{bracketed_host}:{args.port}",
+        f"https://{bracketed_host}:{args.port}",
     )
-    initial_text = html.escape(LANGUAGE_TEXT["EN_NEWEST"])
-    return f"""<!doctype html>
-<html>
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>OpenVoice V2 Local Demo</title>
-  <style>
-    body {{ margin: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; color: #243042; background: #fafafa; }}
-    main {{ max-width: 1200px; margin: 0 auto; padding: 28px 32px; }}
-    h1 {{ margin: 0 0 20px; font-size: 28px; }}
-    .grid {{ display: grid; grid-template-columns: minmax(320px, 1fr) minmax(320px, 1fr); gap: 20px; }}
-    .panel {{ border: 1px solid #d9dee7; border-radius: 8px; background: white; padding: 16px; }}
-    label {{ display: block; font-size: 14px; font-weight: 600; margin: 14px 0 6px; }}
-    select, textarea, input[type="number"], input[type="file"] {{ width: 100%; box-sizing: border-box; border: 1px solid #d2d8e2; border-radius: 6px; padding: 10px; font: inherit; background: white; }}
-    textarea {{ min-height: 130px; resize: vertical; }}
-    .row {{ display: flex; gap: 12px; align-items: center; margin-top: 16px; }}
-    button {{ border: 0; border-radius: 6px; padding: 12px 16px; font-weight: 700; cursor: pointer; }}
-    button.secondary {{ background: #eef1f6; color: #2b3545; }}
-    button.primary {{ background: #ffb36b; color: #af3d00; flex: 1; }}
-    button:disabled {{ opacity: 0.6; cursor: wait; }}
-    pre {{ min-height: 180px; white-space: pre-wrap; overflow-wrap: anywhere; background: #f5f7fb; border: 1px solid #d9dee7; border-radius: 6px; padding: 12px; }}
-    #output audio {{ width: 100%; margin-top: 12px; }}
-    @media (max-width: 820px) {{ .grid {{ grid-template-columns: 1fr; }} main {{ padding: 20px; }} }}
-  </style>
-</head>
-<body>
-  <main>
-    <h1>OpenVoice V2 Local Demo</h1>
-    <div class="grid">
-      <section class="panel">
-        <label for="language">Language</label>
-        <select id="language">{language_options}</select>
-
-        <label for="text">Text</label>
-        <textarea id="text">{initial_text}</textarea>
-
-        <label for="speaker">Base speaker</label>
-        <select id="speaker"><option value="">Use first available speaker</option></select>
-
-        <label for="speed">Speed</label>
-        <input id="speed" type="number" min="0.5" max="2" step="0.05" value="1">
-
-        <label for="reference">Reference audio</label>
-        <input id="reference" type="file" accept="audio/*">
-
-        <div class="row">
-          <button id="refresh" class="secondary" type="button">Refresh speakers</button>
-          <button id="clone" class="primary" type="button">Clone voice</button>
-        </div>
-      </section>
-
-      <section class="panel">
-        <label>Status</label>
-        <pre id="status">Ready.</pre>
-        <label>Output audio</label>
-        <div id="output"></div>
-      </section>
-    </div>
-  </main>
-  <script>
-    const exampleText = {LANGUAGE_TEXT!r};
-    const language = document.getElementById("language");
-    const text = document.getElementById("text");
-    const speaker = document.getElementById("speaker");
-    const speed = document.getElementById("speed");
-    const reference = document.getElementById("reference");
-    const statusBox = document.getElementById("status");
-    const output = document.getElementById("output");
-    const cloneButton = document.getElementById("clone");
-    const refreshButton = document.getElementById("refresh");
-
-    function setBusy(isBusy) {{
-      cloneButton.disabled = isBusy;
-      refreshButton.disabled = isBusy;
-    }}
-
-    language.addEventListener("change", () => {{
-      text.value = exampleText[language.value] || text.value;
-      speaker.innerHTML = '<option value="">Use first available speaker</option>';
-    }});
-
-    refreshButton.addEventListener("click", async () => {{
-      setBusy(true);
-      statusBox.textContent = "Loading speakers...";
-      try {{
-        const response = await fetch(`/api/speakers?language=${{encodeURIComponent(language.value)}}`);
-        const data = await response.json();
-        if (!response.ok || data.error) throw new Error(data.error || response.statusText);
-        speaker.innerHTML = '<option value="">Use first available speaker</option>';
-        for (const item of data.speakers) {{
-          const option = document.createElement("option");
-          option.value = item;
-          option.textContent = item;
-          speaker.appendChild(option);
-        }}
-        statusBox.textContent = data.message;
-      }} catch (error) {{
-        statusBox.textContent = `[ERROR] ${{error.message}}`;
-      }} finally {{
-        setBusy(false);
-      }}
-    }});
-
-    cloneButton.addEventListener("click", async () => {{
-      if (!reference.files.length) {{
-        statusBox.textContent = "Please upload a reference audio file before cloning.";
-        return;
-      }}
-      const form = new FormData();
-      form.append("text", text.value);
-      form.append("language", language.value);
-      form.append("base_speaker", speaker.value);
-      form.append("speed", speed.value);
-      form.append("reference_audio", reference.files[0]);
-
-      setBusy(true);
-      output.innerHTML = "";
-      statusBox.textContent = "Uploading reference audio and cloning...";
-      try {{
-        const response = await fetch("/api/clone", {{ method: "POST", body: form }});
-        const data = await response.json();
-        statusBox.textContent = data.info || "";
-        output.innerHTML = data.audio_html || "";
-        if (!response.ok || data.error) throw new Error(data.error || response.statusText);
-      }} catch (error) {{
-        statusBox.textContent = `[ERROR] ${{error.message}}`;
-      }} finally {{
-        setBusy(false);
-      }}
-    }});
-  </script>
-</body>
-</html>"""
+    valid_host = _startup_check_host(args.host)
+    for invalid_authority in invalid_authorities:
+        if url == invalid_authority or url.startswith(f"{invalid_authority}/"):
+            scheme = invalid_authority.split("://", 1)[0]
+            valid_authority = f"{scheme}://{valid_host}:{args.port}"
+            return valid_authority + url[len(invalid_authority):]
+    return url
 
 
-@app.get("/", response_class=HTMLResponse)
-def index():
-    return render_index()
+def on_reference_audio_change(path):
+    if not path or not os.path.isfile(path):
+        return gr.update(value="", visible=False)
+    return gr.update(value=inline_audio_html(path), visible=True)
 
 
-@app.get("/api/speakers")
-def api_speakers(language: str):
-    speakers, message = refresh_speakers(language)
-    if message.startswith("[ERROR]"):
-        return JSONResponse({"error": message, "speakers": []}, status_code=500)
-    return {"speakers": speakers, "message": message}
+REF_AUDIO_CSS = """
+.ref-audio-noplayer .component-wrapper,
+.ref-audio-noplayer audio { display: none !important; }
+.ref-audio-noplayer .audio-container { height: auto !important; }
+"""
 
 
-@app.post("/api/clone")
-async def api_clone(
-    text: str = Form(...),
-    language: str = Form("EN_NEWEST"),
-    base_speaker: str = Form(""),
-    speed: float = Form(1.0),
-    reference_audio: UploadFile = File(...),
-):
-    request_id = uuid.uuid4().hex[:12]
-    suffix = os.path.splitext(reference_audio.filename or "")[1] or ".wav"
-    upload_dir = tempfile.mkdtemp(prefix=f"openvoice_upload_{request_id}_", dir=args.output_dir)
-    upload_path = os.path.join(upload_dir, f"reference{suffix}")
-    print(f">> Receiving upload: filename={reference_audio.filename}, content_type={reference_audio.content_type}, save_path={upload_path}")
-    with open(upload_path, "wb") as f:
-        shutil.copyfileobj(reference_audio.file, f)
-    print(f">> Upload saved: {upload_path}, size={os.path.getsize(upload_path)} bytes")
+with gr.Blocks(title="OpenVoice V2 Demo", analytics_enabled=False, css=REF_AUDIO_CSS) as demo:
+    gr.Markdown("# OpenVoice V2 Local Demo")
+    gr.Markdown("Upload reference audio, enter text, clone the voice, then play or download the generated output.")
 
-    info, audio_html = clone_voice(text, language, base_speaker, upload_path, speed)
-    if info.startswith("[ERROR]"):
-        return JSONResponse({"info": info, "audio_html": "", "error": info}, status_code=500)
-    return {"info": info, "audio_html": audio_html}
+    with gr.Row():
+        with gr.Column():
+            language_gr = gr.Dropdown(
+                label="Language",
+                choices=list(LANGUAGE_TEXT.keys()),
+                value="EN_NEWEST",
+            )
+            input_text_gr = gr.Textbox(
+                label="Text",
+                value=LANGUAGE_TEXT["EN_NEWEST"],
+                lines=4,
+            )
+            base_speaker_gr = gr.Dropdown(
+                label="Base speaker",
+                choices=[],
+                value=None,
+                info="Leave empty or refresh after selecting language to use the first available speaker.",
+            )
+            speed_gr = gr.Slider(
+                label="Speed",
+                minimum=0.5,
+                maximum=2.0,
+                value=1.0,
+                step=0.05,
+            )
+            reference_gr = gr.Audio(
+                label="Reference audio",
+                elem_classes=["ref-audio-noplayer"],
+                sources=["upload", "microphone"],
+                type="filepath",
+            )
+            reference_preview_gr = gr.HTML(label="Reference preview", visible=False)
+            with gr.Row():
+                refresh_button = gr.Button("Refresh speakers")
+                clone_button = gr.Button("Clone voice", variant="primary")
+
+        with gr.Column():
+            info_gr = gr.Textbox(label="Status", lines=8)
+            output_audio_gr = gr.HTML(label="Output audio")
+
+    language_gr.change(update_example_text, inputs=language_gr, outputs=input_text_gr)
+    reference_gr.change(on_reference_audio_change, inputs=reference_gr, outputs=reference_preview_gr)
+    reference_gr.clear(lambda: gr.update(value="", visible=False), outputs=reference_preview_gr)
+    refresh_button.click(refresh_speakers, inputs=language_gr, outputs=[base_speaker_gr, info_gr])
+    clone_button.click(
+        clone_voice,
+        inputs=[input_text_gr, language_gr, base_speaker_gr, reference_gr, speed_gr],
+        outputs=[info_gr, output_audio_gr],
+    )
 
 
 def launch_demo():
     preload_models()
-    host = args.host.strip("[]")
-    print(f"Running on IPv6 URL:  http://[::1]:{args.port}")
-    uvicorn.run(app, host=host, port=args.port)
+    if not args.no_queue:
+        demo.queue(20)
+
+    original_session_request = requests.sessions.Session.request
+
+    def ipv6_safe_request(session, method, url, *request_args, **request_kwargs):
+        url = _rewrite_gradio_local_url(url)
+        return original_session_request(session, method, url, *request_args, **request_kwargs)
+
+    requests.sessions.Session.request = ipv6_safe_request
+    try:
+        if _is_ipv6_literal(args.host):
+            print(f"Running on IPv6 URL:  http://{_startup_check_host(args.host)}:{args.port}")
+        demo.launch(
+            server_name=args.host,
+            server_port=args.port,
+            share=args.share,
+            debug=True,
+            show_api=True,
+            show_error=True,
+        )
+    finally:
+        requests.sessions.Session.request = original_session_request
 
 
 if __name__ == "__main__":
