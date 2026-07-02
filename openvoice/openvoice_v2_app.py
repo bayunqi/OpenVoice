@@ -42,6 +42,7 @@ bootstrap_cudnn_library_path()
 
 
 import gradio as gr
+import gradio_client.utils as gradio_client_utils
 import soundfile
 import torch
 
@@ -50,6 +51,20 @@ from openvoice.api import ToneColorConverter
 
 
 mimetypes.add_type("audio/wav", ".wav")
+
+
+def patch_gradio_schema_bool_bug():
+    if getattr(gradio_client_utils, "_openvoice_bool_schema_patch", False):
+        return
+    original = gradio_client_utils._json_schema_to_python_type
+
+    def patched_json_schema_to_python_type(schema, defs):
+        if isinstance(schema, bool):
+            return "Any"
+        return original(schema, defs)
+
+    gradio_client_utils._json_schema_to_python_type = patched_json_schema_to_python_type
+    gradio_client_utils._openvoice_bool_schema_patch = True
 
 
 LANGUAGE_TEXT = {
@@ -386,7 +401,7 @@ def launch_demo():
     if not args.no_queue:
         demo.queue(20)
 
-    gr.Blocks.get_api_info = lambda self: {}
+    patch_gradio_schema_bool_bug()
     demo.launch(server_name=args.host, server_port=args.port, share=args.share)
 
 
