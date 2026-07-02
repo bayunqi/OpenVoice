@@ -442,7 +442,7 @@ def launch_demo():
             server_port=args.port,
             share=args.share,
             debug=True,
-            show_api=True,
+            show_api=False,
             show_error=True,
         )
     finally:
