@@ -47,10 +47,15 @@ import soundfile
 import torch
 
 import jinja2.utils
+import starlette.templating
+from starlette.requests import Request
 
+# =============================================================================
+# Patch 1: Jinja2 LRU cache unhashable keys
 # Gradio 4.44.1 passes a dict inside Jinja2's template cache key,
 # making it unhashable. Patch both get and setitem to gracefully
 # skip caching instead of crashing.
+# =============================================================================
 _original_lru_cache_get = jinja2.utils.LRUCache.get
 _original_lru_cache_setitem = jinja2.utils.LRUCache.__setitem__
 
@@ -71,6 +76,43 @@ def _patched_lru_cache_setitem(self, key, value):
 
 jinja2.utils.LRUCache.get = _patched_lru_cache_get
 jinja2.utils.LRUCache.__setitem__ = _patched_lru_cache_setitem
+
+
+# =============================================================================
+# Patch 2: Starlette TemplateResponse API change
+# Starlette 0.28+ changed TemplateResponse signature from:
+#   Old: TemplateResponse(name, context, ...)
+#   New: TemplateResponse(request, name, context, ...)
+# Gradio still uses the old API, causing arguments to shift and the template
+# name to receive a dict (the context) instead of a string.
+# =============================================================================
+_original_template_response = starlette.templating.Jinja2Templates.TemplateResponse
+
+
+def _patched_template_response(self, *args, **kwargs):
+    # Detect old signature: first arg is string (template name), second is dict (context)
+    if len(args) >= 2 and isinstance(args[0], str) and isinstance(args[1], dict):
+        name = args[0]
+        context = args[1]
+        # Extract request from context (Gradio typically includes it)
+        request = context.get("request")
+        if request is None:
+            # Fallback: create a minimal request object
+            scope = {
+                "type": "http",
+                "method": "GET",
+                "path": "/",
+                "query_string": b"",
+                "headers": [],
+                "server": ("localhost", 80),
+            }
+            request = Request(scope)
+        # Call with new signature
+        return _original_template_response(self, request, name, context, *args[2:], **kwargs)
+    return _original_template_response(self, *args, **kwargs)
+
+
+starlette.templating.Jinja2Templates.TemplateResponse = _patched_template_response
 
 from openvoice import se_extractor
 from openvoice.api import ToneColorConverter
