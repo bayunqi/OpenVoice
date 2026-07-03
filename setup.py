@@ -39,7 +39,7 @@ setup(name='MyShell-OpenVoice',
             'cn2an==0.5.22',
             'jieba==0.42.1',
             'gradio==5.45.0',
-            'huggingface-hub==0.25.2',
+            'huggingface-hub>=0.25.2',
             'langid==1.1.6'
       ],
       zip_safe=False
